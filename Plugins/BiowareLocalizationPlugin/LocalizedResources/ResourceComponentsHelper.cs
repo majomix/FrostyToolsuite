@@ -356,6 +356,7 @@ namespace BiowareLocalizationPlugin.LocalizedResources
     public class LocalizedStringWithId : LocalizedString
     {
         public readonly uint Id;
+        public readonly uint InternalId;
 
         public LocalizedStringWithId(uint inId, int inDefaultPosition) : base(inDefaultPosition)
         {
@@ -366,6 +367,12 @@ namespace BiowareLocalizationPlugin.LocalizedResources
             : base(inDefaultPosition, inText)
         {
             this.Id = inId;
+        }
+
+        public LocalizedStringWithId(uint inId, int inDefaultPosition, string inText, uint internalId)
+            : this(inId, inDefaultPosition, inText)
+        {
+            InternalId = internalId;
         }
 
         public override string ToString()

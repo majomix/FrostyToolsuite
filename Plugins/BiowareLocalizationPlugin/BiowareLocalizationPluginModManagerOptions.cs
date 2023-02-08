@@ -23,7 +23,7 @@ namespace BiowareLocalizationPlugin
         [DisplayName("Ask for Xml Export Options")]
         [Description("If enabled, a popup prompt allows selecting whether to export all texts or only modified ones. If this value is false, then the default from below is used. This setting is only for the editor and has no effect in the mod manager.")]
         [EbxFieldMeta(FrostySdk.IO.EbxFieldType.Boolean)]
-        public bool AskForXmlExportOptions { get; set; } = false;
+        public bool AskForXmlExportOptions { get; set; } = true;
 
         public override void Load()
         {

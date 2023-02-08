@@ -9,6 +9,8 @@ using System.IO;
 using System.Text;
 using System.Linq;
 using System;
+using System.Runtime.Serialization.Json;
+using System.Security.Policy;
 
 namespace BiowareLocalizationPlugin.LocalizedResources
 {
@@ -116,15 +118,19 @@ namespace BiowareLocalizationPlugin.LocalizedResources
                 .Append(entry.Name)
                 .ToString();
 
-            if (ProfilesLibrary.DataVersion == (int)ProfileVersion.Anthem)
+            switch (ProfilesLibrary.DataVersion)
             {
-                ReadAnthemStrings(reader, entry);
-            }
-            else
-            {
-                // Profile Version MEA = 20170321
-                // Profile Version DAI = 20141118
-                Read_MassEffect_DragonAge_Strings(reader);
+                case (int)ProfileVersion.DeadSpace:
+                    ReadDeadSpaceStrings(reader, entry);
+                    break;
+                case (int)ProfileVersion.Anthem:
+                    ReadAnthemStrings(reader, entry);
+                    break;
+                default:
+                    // Profile Version MEA = 20170321
+                    // Profile Version DAI = 20141118
+                    Read_MassEffect_DragonAge_Strings(reader);
+                    break;
             }
 
             m_modifiedResource = modifiedData as ModifiedLocalizationResource;
@@ -139,156 +145,17 @@ namespace BiowareLocalizationPlugin.LocalizedResources
 
         public override byte[] SaveBytes()
         {
-
             // remove these logs
             if (m_printVerificationTexts) { App.Logger.Log("Writing Texts for <{0}>", Name); }
 
-            /*Plan of Action:
-             * -recalculate Huffman encoding
-             *  -- getHuffman codes for each character
-             * -recompute list of string ids and string positions with altered texts
-             *  -- need to already encoded strings for the position calculation!
-             * -recompute other offsets based on the last step info
-             * -replace the meta data with the new dataOffset (!)
-             * -write header with altered offsets
-             * -write stuff and things between header and strings
-             * -write strings with the new huffman encoding
-             */
-
-            List<SortedDictionary<uint, string>> allTexts = GetAllSortedTextsToWrite();
-            HuffmanNode newRootNode = GetEncodingRootNode(allTexts);
-
-            uint nodeOffset = m_headerData.NodeOffset;
-
-            // flatten the tree, we need to list representation again...
-            List<HuffmanNode> nodeList = ResourceUtils.GetNodeListToWrite(newRootNode);
-            uint newNodeCount = (uint)nodeList.Count;
-
-            uint encodingNodesSize = newNodeCount * 4;
-            uint newStringsOffset = nodeOffset + encodingNodesSize;
-
-            Dictionary<char, List<bool>> encoding = ResourceUtils.GetCharEncoding(nodeList);
-            EncodedTextPositionGrouping encodedTextsGrouping = ResourceUtils.GetEncodedTextsToWrite(allTexts, encoding);
-
-            uint newStringsCount = (uint)encodedTextsGrouping.PrimaryTextIdsAndPositions.Count;
-
-            uint blockOffset = newStringsOffset + (newStringsCount * 8);
-            uint lastBlockSize = 0;
-            List<DataCountAndOffsets> recalculatedAdditionalOffsets = new List<DataCountAndOffsets>();
-
-            // one for the money: No idea what this is
-            foreach (DataCountAndOffsets unknownDef in m_headerData.FirstUnknownDataDefSegments)
+            switch (ProfilesLibrary.DataVersion)
             {
-                uint byteBlockCount8 = unknownDef.Count;
-                blockOffset += lastBlockSize;
-                recalculatedAdditionalOffsets.Add(new DataCountAndOffsets()
-                {
-                    Count = byteBlockCount8,
-                    Offset = blockOffset
-
-                });
-
-                lastBlockSize = byteBlockCount8 * 8;
-            }
-
-            // two for the show: These are the ids and positions of the declinated adjectives used in DA:I crafting
-            foreach (var declinatedAdjectivesBlock in encodedTextsGrouping.DeclinatedAdjectivesIdsAndPositions)
-            {
-                uint byteBlockCount8 = (uint)declinatedAdjectivesBlock.Count;
-                blockOffset += lastBlockSize;
-                recalculatedAdditionalOffsets.Add(new DataCountAndOffsets()
-                {
-                    Count = byteBlockCount8,
-                    Offset = blockOffset
-
-                });
-                lastBlockSize = byteBlockCount8 * 8;
-            }
-
-            uint newDataOffset = blockOffset + lastBlockSize;
-            // replace the metadata which is where the game actually reads the dataoffset from.
-            ReplaceMetaData(newDataOffset);
-
-            using (NativeWriter writer = new NativeWriter(new MemoryStream()))
-            {
-
-                // Then write the type dependent header data
-                writer.Write(ResourceHeader.Magic);
-
-                writer.Write(m_headerData.Unknown1);
-
-                writer.Write(newDataOffset);
-
-                writer.Write(m_headerData.Unknown2);
-                writer.Write(m_headerData.Unknown3);
-                writer.Write(m_headerData.Unknown4);
-
-                writer.Write(newNodeCount);
-                writer.Write(nodeOffset);
-                writer.Write(newStringsCount);
-                writer.Write(newStringsOffset);
-
-                foreach (DataCountAndOffsets uds in recalculatedAdditionalOffsets)
-                {
-                    writer.Write(uds.Count);
-                    writer.Write(uds.Offset);
-                }
-
-                if (m_printVerificationTexts)
-                { App.Logger.Log(".. Writer Position before <{0}> nodes is <{1}>, expected <{2}> ", nodeList.Count, writer.Position, nodeOffset); }
-
-                // Write huffman nodes
-                foreach (HuffmanNode node in nodeList)
-                {
-                    writer.Write(node.Value);
-                }
-
-                long actualStringsOffset = writer.Position;
-                if (m_printVerificationTexts)
-                { App.Logger.Log(".. Writer Position before textlocations is <{0}>, expected <{1}> ", writer.Position, newStringsOffset); }
-
-                //Write string id positions
-                foreach (KeyValuePair<uint, EncodedTextPosition> entry in encodedTextsGrouping.PrimaryTextIdsAndPositions)
-                {
-                    writer.Write(entry.Key);
-                    writer.Write(entry.Value.Position);
-                }
-
-                if (m_printVerificationTexts)
-                {
-                    App.Logger.Log(".. Writer Position after <{0}> textlocations is <{1}>, expected <{2}>. Length of last part was <{3}>",
-                        encodedTextsGrouping.PrimaryTextIdsAndPositions.Count, writer.Position, recalculatedAdditionalOffsets[0].Offset, writer.Position - actualStringsOffset);
-                }
-
-                //Write unknownDataSegments
-                foreach (byte[] someData in m_unknownData)
-                {
-                    writer.Write(someData);
-                }
-
-                // write the ids and positions of the declinated adjectives.
-                foreach (var declinationBlock in encodedTextsGrouping.DeclinatedAdjectivesIdsAndPositions)
-                {
-                    foreach (KeyValuePair<uint, EncodedTextPosition> entry in declinationBlock)
-                    {
-                        writer.Write(entry.Key);
-                        writer.Write(entry.Value.Position);
-                    }
-                }
-
-                if (m_printVerificationTexts)
-                { App.Logger.Log(".. Writer Position before texts is <{0}>, expected <{1}>", writer.Position, newDataOffset); }
-
-                // Write encoded texts
-                byte[] bitTexts = ResourceUtils.GetTextRepresentationToWrite(encodedTextsGrouping.AllEncodedTextPositions);
-                writer.Write(bitTexts);
-
-                if (m_printVerificationTexts)
-                {
-                    App.Logger.Log(".. Writer Position after encoded texts is <{0}>. EncodedTexts size was <{1}> byte", writer.Position, bitTexts.Length);
-                }
-
-                return writer.ToByteArray();
+                case (int)ProfileVersion.DeadSpace:
+                    return SaveDeadSpaceStrings();
+                case (int)ProfileVersion.Anthem:
+                    throw new NotImplementedException();
+                default:
+                    return Save_MassEffect_DragonAge_Strings();
             }
         }
 
@@ -698,6 +565,89 @@ namespace BiowareLocalizationPlugin.LocalizedResources
             }
         }
 
+        private void ReadDeadSpaceStrings(NativeReader reader, ResAssetEntry entry)
+        {
+            _ = reader.ReadUInt();
+            _ = reader.ReadUInt();
+            _ = reader.ReadUInt();
+
+            m_headerData = new ResourceHeader();
+            m_unknownData = new List<byte[]>();
+            DragonAgeDeclinatedCraftingNames = new DragonAgeDeclinatedAdjectiveTuples(0);
+
+            long numStrings = reader.ReadLong();
+            _ = reader.ReadUInt();
+            long numStrings2 = reader.ReadLong();
+            if (numStrings != numStrings2)
+            {
+                App.Logger.Log("Possible file corruption in {0}", entry.Name);
+            }
+
+            _ = reader.ReadLong();
+            _ = reader.ReadUInt();
+
+            Dictionary<uint, uint> idToInternalId = new Dictionary<uint, uint>();
+
+            for (int i = 0; i < numStrings; i++)
+            {
+                uint stringId = reader.ReadUInt();
+                uint internalId = reader.ReadUInt();
+                reader.Position += 8;
+                idToInternalId[stringId] = internalId;
+            }
+
+            while (reader.Position < reader.Length)
+            {
+                uint stringId = reader.ReadUInt();
+                int stringLen = reader.ReadInt();
+                string str = reader.ReadSizedString(stringLen);
+                int stringPosition = (int)reader.Position;
+
+                m_localizedStrings.Add(new LocalizedStringWithId(stringId, stringPosition, str, idToInternalId[stringId]));
+            }
+        }
+
+
+        private byte[] SaveDeadSpaceStrings()
+        {
+            using (NativeWriter writer = new NativeWriter(new MemoryStream()))
+            {
+                writer.Write(0);
+                writer.Write(100);
+                writer.Write(2690425967);
+
+                writer.Write(m_localizedStrings.Count);
+                writer.Write((long)0);
+                writer.Write(m_localizedStrings.Count);
+                writer.Write((long)0);
+                writer.Write((long)0);
+
+                foreach (var text in m_localizedStrings)
+                {
+                    writer.Write(text.Id);
+                    writer.Write(text.InternalId);
+                    writer.Write((long)0);
+                }
+
+                foreach (var text in m_localizedStrings)
+                {
+                    writer.Write(text.Id);
+                    if (m_modifiedResource != null && m_modifiedResource.AlteredTexts.ContainsKey(text.Id))
+                    {
+                        writer.WriteSizedString(m_modifiedResource.AlteredTexts[text.Id]);
+                    }
+                    else
+                    {
+                        writer.WriteSizedString(text.ToString());
+                    }
+                }
+
+                var result = writer.ToByteArray();
+
+                return result;
+            }
+        }
+
         /// <summary>
         /// Creates the localized string list from the huffman encoded Mass Effect and Dragon Age bundle entries.
         /// </summary>
@@ -744,6 +694,165 @@ namespace BiowareLocalizationPlugin.LocalizedResources
 
 
             ReadStrings(reader, m_encodingRootNode, GetAllLocalizedStrings());
+        }
+
+        private byte[] Save_MassEffect_DragonAge_Strings()
+        {
+            /*Plan of Action:
+             * -recalculate Huffman encoding
+             *  -- getHuffman codes for each character
+             * -recompute list of string ids and string positions with altered texts
+             *  -- need to already encoded strings for the position calculation!
+             * -recompute other offsets based on the last step info
+             * -replace the meta data with the new dataOffset (!)
+             * -write header with altered offsets
+             * -write stuff and things between header and strings
+             * -write strings with the new huffman encoding
+             */
+
+            List<SortedDictionary<uint, string>> allTexts = GetAllSortedTextsToWrite();
+            HuffmanNode newRootNode = GetEncodingRootNode(allTexts);
+
+            uint nodeOffset = m_headerData.NodeOffset;
+
+            // flatten the tree, we need to list representation again...
+            List<HuffmanNode> nodeList = ResourceUtils.GetNodeListToWrite(newRootNode);
+            uint newNodeCount = (uint)nodeList.Count;
+
+            uint encodingNodesSize = newNodeCount * 4;
+            uint newStringsOffset = nodeOffset + encodingNodesSize;
+
+            Dictionary<char, List<bool>> encoding = ResourceUtils.GetCharEncoding(nodeList);
+            EncodedTextPositionGrouping encodedTextsGrouping = ResourceUtils.GetEncodedTextsToWrite(allTexts, encoding);
+
+            uint newStringsCount = (uint)encodedTextsGrouping.PrimaryTextIdsAndPositions.Count;
+
+            uint blockOffset = newStringsOffset + (newStringsCount * 8);
+            uint lastBlockSize = 0;
+            List<DataCountAndOffsets> recalculatedAdditionalOffsets = new List<DataCountAndOffsets>();
+
+            // one for the money: No idea what this is
+            foreach (DataCountAndOffsets unknownDef in m_headerData.FirstUnknownDataDefSegments)
+            {
+                uint byteBlockCount8 = unknownDef.Count;
+                blockOffset += lastBlockSize;
+                recalculatedAdditionalOffsets.Add(new DataCountAndOffsets()
+                {
+                    Count = byteBlockCount8,
+                    Offset = blockOffset
+                });
+
+                lastBlockSize = byteBlockCount8 * 8;
+            }
+
+            // two for the show: These are the ids and positions of the declinated adjectives used in DA:I crafting
+            foreach (var declinatedAdjectivesBlock in encodedTextsGrouping.DeclinatedAdjectivesIdsAndPositions)
+            {
+                uint byteBlockCount8 = (uint)declinatedAdjectivesBlock.Count;
+                blockOffset += lastBlockSize;
+                recalculatedAdditionalOffsets.Add(new DataCountAndOffsets()
+                {
+                    Count = byteBlockCount8,
+                    Offset = blockOffset
+                });
+                lastBlockSize = byteBlockCount8 * 8;
+            }
+
+            uint newDataOffset = blockOffset + lastBlockSize;
+            // replace the metadata which is where the game actually reads the dataoffset from.
+            ReplaceMetaData(newDataOffset);
+
+            using (NativeWriter writer = new NativeWriter(new MemoryStream()))
+            {
+                // Then write the type dependent header data
+                writer.Write(ResourceHeader.Magic);
+
+                writer.Write(m_headerData.Unknown1);
+
+                writer.Write(newDataOffset);
+
+                writer.Write(m_headerData.Unknown2);
+                writer.Write(m_headerData.Unknown3);
+                writer.Write(m_headerData.Unknown4);
+
+                writer.Write(newNodeCount);
+                writer.Write(nodeOffset);
+                writer.Write(newStringsCount);
+                writer.Write(newStringsOffset);
+
+                foreach (DataCountAndOffsets uds in recalculatedAdditionalOffsets)
+                {
+                    writer.Write(uds.Count);
+                    writer.Write(uds.Offset);
+                }
+
+                if (m_printVerificationTexts)
+                {
+                    App.Logger.Log(".. Writer Position before <{0}> nodes is <{1}>, expected <{2}> ", nodeList.Count,
+                        writer.Position, nodeOffset);
+                }
+
+                // Write huffman nodes
+                foreach (HuffmanNode node in nodeList)
+                {
+                    writer.Write(node.Value);
+                }
+
+                long actualStringsOffset = writer.Position;
+                if (m_printVerificationTexts)
+                {
+                    App.Logger.Log(".. Writer Position before textlocations is <{0}>, expected <{1}> ", writer.Position,
+                        newStringsOffset);
+                }
+
+                //Write string id positions
+                foreach (KeyValuePair<uint, EncodedTextPosition> entry in encodedTextsGrouping.PrimaryTextIdsAndPositions)
+                {
+                    writer.Write(entry.Key);
+                    writer.Write(entry.Value.Position);
+                }
+
+                if (m_printVerificationTexts)
+                {
+                    App.Logger.Log(
+                        ".. Writer Position after <{0}> textlocations is <{1}>, expected <{2}>. Length of last part was <{3}>",
+                        encodedTextsGrouping.PrimaryTextIdsAndPositions.Count, writer.Position,
+                        recalculatedAdditionalOffsets[0].Offset, writer.Position - actualStringsOffset);
+                }
+
+                //Write unknownDataSegments
+                foreach (byte[] someData in m_unknownData)
+                {
+                    writer.Write(someData);
+                }
+
+                // write the ids and positions of the declinated adjectives.
+                foreach (var declinationBlock in encodedTextsGrouping.DeclinatedAdjectivesIdsAndPositions)
+                {
+                    foreach (KeyValuePair<uint, EncodedTextPosition> entry in declinationBlock)
+                    {
+                        writer.Write(entry.Key);
+                        writer.Write(entry.Value.Position);
+                    }
+                }
+
+                if (m_printVerificationTexts)
+                {
+                    App.Logger.Log(".. Writer Position before texts is <{0}>, expected <{1}>", writer.Position, newDataOffset);
+                }
+
+                // Write encoded texts
+                byte[] bitTexts = ResourceUtils.GetTextRepresentationToWrite(encodedTextsGrouping.AllEncodedTextPositions);
+                writer.Write(bitTexts);
+
+                if (m_printVerificationTexts)
+                {
+                    App.Logger.Log(".. Writer Position after encoded texts is <{0}>. EncodedTexts size was <{1}> byte",
+                        writer.Position, bitTexts.Length);
+                }
+
+                return writer.ToByteArray();
+            }
         }
 
         /// <summary>

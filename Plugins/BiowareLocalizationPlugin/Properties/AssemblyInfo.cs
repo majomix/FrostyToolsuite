@@ -28,6 +28,7 @@ using System.Windows;
 [assembly: PluginValidForProfile((int)ProfileVersion.DragonAgeInquisition)]
 [assembly: PluginValidForProfile((int)ProfileVersion.MassEffectAndromeda)]
 [assembly: PluginValidForProfile((int)ProfileVersion.Anthem)]
+[assembly: PluginValidForProfile((int)ProfileVersion.DeadSpace)]
 
 
 [assembly: RegisterLocalizedStringDatabase(typeof(BiowareLocalizedStringDatabase))]
